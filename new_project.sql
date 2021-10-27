@@ -19,14 +19,14 @@ CREATE TABLE courses(
 );
 
 CREATE TABLE offerings(
+              offering_id serial PRIMARY KEY,
               course_id INTEGER NOT NULL,
               instructor_id INTEGER NOT NULL,
               section INTEGER NOT NULL,
               semester INTEGER NOT NULL,
               Year INTEGER NOT NULL,
               running VARCHAR(255) NOT NULL,
-              slot varchar(255) NOT NULL,
-              PRIMARY KEY (course_id, section, semester, year)  
+              slot varchar(255) NOT NULL
 );
 
 CREATE TABLE prerequisites(
@@ -140,3 +140,50 @@ create or replace procedure add_prerequisite(
        end if;
     end; $$;
 
+----------------------------------------
+
+create or replace procedure register_offering(
+               _course_id int,
+	           _instructor_id int,
+	           _section int,
+	           _semester int,
+	           _year int,     
+               _running varchar(255),
+               _slot varchar(255)
+    )
+    language plpgsql
+    as $$
+    declare
+        course_present integer;
+        instructor_present integer;
+        check_for_duplicates integer;
+    BEGIN
+       SELECT COUNT(*)
+       INTO course_present
+       FROM courses
+       WHERE courses.course_id = _course_id;
+
+       SELECT COUNT(*)
+       INTO instructor_present
+       FROM instructors
+       WHERE instructors.instructor_id = _instructor_id;
+
+       SELECT COUNT(*)
+       INTO check_for_duplicates
+       FROM offerings
+       WHERE offerings.course_id = _course_id
+       AND offerings.section = _section
+       AND offerings.semester = _semester
+       AND offerings.year = _year;
+       
+       if course_present = 0 then
+          raise EXCEPTION 'course not present';
+       elsif instructor_present = 0 then
+          raise EXCEPTION 'instructor not present';
+       elsif check_for_duplicates > 0 then
+          raise EXCEPTION 'duplicate value present in table';
+       else
+          INSERT INTO offerings(course_id, instructor_id,section, semester, year, running, slot)
+          VALUES (_course_id, _instructor_id, _section, _semester, _year, _running, _slot);
+       end if;
+    end; $$;
