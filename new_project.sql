@@ -112,20 +112,31 @@ create or replace procedure register_student(
 --------------------------------------------
 create or replace procedure add_prerequisite(
                _course_id int,
-	           _prerequisite VARCHAR(255)
+	           _prerequisite_id int
     )
     language plpgsql
     as $$
     declare
         course_present integer;
+        prerequisite_present integer;
     BEGIN
        SELECT COUNT(*)
        INTO course_present
        FROM courses
        WHERE courses.course_id = _course_id;
 
-       if course_present > 0 then
+       SELECT COUNT(*)
+       INTO prerequisite_present
+       FROM courses
+       WHERE courses.course_id = _prerequisite_id;
+       
+       if course_present = 0 then
+          raise EXCEPTION 'course not present';
+       elsif prerequisite_present = 0 then
+          raise EXCEPTION 'prerequisite not present';
+       else
           INSERT INTO prerequisites(course_id, prerequisite)
-          VALUES (_course_id, _prerequisite);
+          VALUES (_course_id, _prerequisite_id);
        end if;
     end; $$;
+
