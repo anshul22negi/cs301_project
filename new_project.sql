@@ -217,3 +217,26 @@ create or replace procedure add_batch_prerequisite(
           VALUES (_offering_id, _batch);
        end if;
     end; $$;
+
+------------------------
+
+create or replace function new_instructor_table()
+returns trigger
+language plpgsql
+as $$
+declare
+      table_name varchar(255) := 'instructor_' || NEW.instructor_id;
+begin
+EXECUTE 
+        'CREATE TABLE ' 
+         || quote_ident(table_name)
+         ||  ' (offering_id  INTEGER NOT NULL);';
+
+        return new;
+end; $$;
+
+CREATE TRIGGER new_instructor_table
+BEFORE INSERT 
+ON instructors
+FOR EACH ROW
+EXECUTE PROCEDURE new_instructor_table();
