@@ -34,6 +34,12 @@ CREATE TABLE prerequisites(
               prerequisite INTEGER NOT NULL
 
 );
+
+CREATE TABLE offered_to_batches(
+              offering_id INTEGER NOT NULL,
+              batch INTEGER NOT NULL
+);
+
 CREATE TABLE Students(
                student_id serial PRIMARY KEY,
                student_name VARCHAR(255) NOT NULL,
@@ -185,5 +191,29 @@ create or replace procedure register_offering(
        else
           INSERT INTO offerings(course_id, instructor_id,section, semester, year, running, slot)
           VALUES (_course_id, _instructor_id, _section, _semester, _year, _running, _slot);
+       end if;
+    end; $$;
+
+----------------------------------------------------------------
+create or replace procedure add_batch_prerequisite(
+               _offering_id int,
+	           _batch int
+    )
+    language plpgsql
+    as $$
+    declare
+        offering_present integer;
+    BEGIN
+       SELECT COUNT(*)
+       INTO offering_present
+       FROM offerings
+       WHERE offerings.offering_id = _offering_id;
+
+       
+       if offering_present = 0 then
+          raise EXCEPTION 'offering not present';
+       else
+          INSERT INTO offered_to_batches(offering_id, batch)
+          VALUES (_offering_id, _batch);
        end if;
     end; $$;
