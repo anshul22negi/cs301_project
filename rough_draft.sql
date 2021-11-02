@@ -237,7 +237,7 @@ declare
       table_name varchar(255) := 'ins_' || NEW.instructor_id;
       query text;
 begin 
-    EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offerring_id INTEGER, student_id INTEGER, instructor_approval boolean);', 'instructor_tickets_' || NEW.instructor_id);
+    EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offering_id INTEGER, student_id INTEGER, instructor_approval boolean);', 'instructor_tickets_' || NEW.instructor_id);
     query := format('CREATE ROLE %I LOGIN PASSWORD ''ins'';',  'ins' || NEW.instructor_id);
     RAISE NOTICE 'query = %', query; 
     EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ins'';',  'ins' || NEW.instructor_id);
@@ -304,7 +304,7 @@ declare
       table_name varchar(255) := 'adv_' || NEW.advisor_id;
       query text;
 begin 
-    EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offerring_id INTEGER, student_id INTEGER, advisor_approval boolean);', 'advisor_tickets_' || NEW.advisor_id);
+    EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offering_id INTEGER, student_id INTEGER, advisor_approval boolean);', 'advisor_tickets_' || NEW.advisor_id);
     query := format('CREATE ROLE %I LOGIN PASSWORD ''ba'';',  'ba' || NEW.advisor_id);
     RAISE NOTICE 'query = %', query; 
     EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ba'';',  'ba' || NEW.advisor_id);
@@ -734,7 +734,7 @@ EXECUTE PROCEDURE check_cgpa_before_registration();
 ----------------
 
 CREATE TABLE Tickets_global(
-               ticket_id serial PRIMARY KEY,
+               ticket_id INTEGER PRIMARY KEY,
                offering_id INTEGER NOT NULL,
 	           student_id INTEGER NOT NULL,
                FOREIGN KEY (student_id) REFERENCES students (student_id),
@@ -742,7 +742,31 @@ CREATE TABLE Tickets_global(
 
                
 );
+/*
+CREATE TRIGGER trigger_check_slot_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_slot_before_registration();
 
+CREATE TRIGGER trigger_check_batch_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_batch_before_registration();
+
+CREATE TRIGGER trigger_check_prerequisite_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_prerequisite_before_registration();
+
+CREATE TRIGGER trigger_check_cgpa_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_cgpa_before_registration();
+*/
 CREATE TABLE dean_tickets(
                ticket_id serial PRIMARY KEY,
                offering_id INTEGER NOT NULL,
@@ -751,8 +775,9 @@ CREATE TABLE dean_tickets(
 
 );
 
-GRANT ALL ON Tickets_global 
+GRANT ALL PRIVILEGES ON Tickets_global 
 TO dean, gp_instructors, gp_students, gp_advisors;
+
 
 
 create or replace procedure register_student(
@@ -770,7 +795,9 @@ declare
     current_course_credits integer;
     current_total_credits integer;
     _batch_year integer; 
-    _found integer;   
+    _found integer;  
+    Ticket_id_created integer; 
+    num_entrys integer;
 begin
     -- calculate the 1.25 * average of credits of previouse two semesters
     SELECT c.credits, o.year, o.semester
@@ -852,10 +879,24 @@ begin
             INSERT INTO registrations(offering_id, student_id)
             VALUES (_offering_id, _student_id);
     else
+
+            SELECT MAX(ticket_id)
+            INTO ticket_id_created
+            FROM Tickets_global T;
+
+            SELECT count(*)
+            INTO num_entrys
+            FROM Tickets_global T;
+
+            if num_entrys = 0 then
+                ticket_id_created := 0;
+            end if;
+
+            ticket_id_created := ticket_id_created + 1;
+
             raise notice 'credit limit exceeded, ticket raised';
-            -- TODO:
-            INSERT INTO Tickets_global(offering_id, student_id) 
-            VALUES (_offering_id, _student_id);
+            INSERT INTO Tickets_global(ticket_id, offering_id, student_id) 
+            VALUES (ticket_id_created, _offering_id, _student_id);
     end if;                    
 end; $$;
 --/////////////////
@@ -918,9 +959,9 @@ CREATE OR REPLACE PROCEDURE instructor_receives_tickets(
     declare
        TABLENAME varchar(255) := 'instructor_tickets_' || ins_id; 
     BEGIN
-       INSERT INTO TABLENAME(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T
-       WHERE ins_id = T.instructor_id;
+       execute 'INSERT INTO ' || 'instructor_tickets_' || ins_id || '(ticket_id, offering_id, student_id) 
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T, Offerings AS O
+       WHERE O.offering_id = T.offering_id AND O.instructor_id = '|| ins_id || ';';
 
     -- DELETE FROM Tickets_global WHERE ticket_id in (SELECT ticket_id FROM TABLENAME);
     END; $$; 
@@ -932,23 +973,24 @@ returns trigger
 language plpgsql
 as $$
 declare
-      table_name varchar(255);
-      ins_id varchar(255);
+      ins_id integer;
       decision boolean;
 begin
-        SELECT offerings.instructor_id 
+        SELECT O.instructor_id 
         INTO ins_id 
-        FROM offerings AS O, tickets_global AS T 
-        WHERE O.offering_id = T.offering_id AND O.student_id = T.student_id;
-
-        table_name := 'instructor_tickets_' + ins_id;
+        FROM offerings AS O, tickets_global AS T
+        WHERE O.offering_id = NEW.offering_id;
         
-        SELECT instructor_approval
-        INTO decision 
-        FROM table_name
-        WHERE table_name.ticket_id = new.ticket_id;
- 
-        if decision<>null THEN        
+        execute 'SELECT instructor_approval 
+        FROM ' || 'instructor_tickets_' || ins_id || ' AS T
+        WHERE T.ticket_id = ' || new.ticket_id || ';'
+        INTO decision;
+        
+        raise notice 'decision %', decision;
+
+        if decision=null THEN        
+            return null;
+        ELSE
             return new;
         end if;
 end; $$;
@@ -961,20 +1003,28 @@ CREATE OR REPLACE PROCEDURE advisor_receives_tickets(
     language  plpgsql
     as $$
     declare
-       TABLENAME varchar(255) := 'advisor_tickets_' || adv_id; 
        ins_table varchar(255);
        ins_id integer;
+       ticket_id_ integer;
+       offering_id_ integer;
+       student_id_ integer;
     BEGIN
        
-       CREATE TRIGGER check_instructor_verdict
+       execute 'DROP TRIGGER IF EXISTS check_instructor_verdict ON advisor_tickets_' || advisor_id || ';';
+       execute 'CREATE TRIGGER check_instructor_verdict
        BEFORE INSERT 
-       ON TABLENAME
+       ON ' || 'advisor_tickets_' || advisor_id || ' 
        FOR EACH ROW
-       EXECUTE PROCEDURE check_instructor_verdict();
+       EXECUTE PROCEDURE check_instructor_verdict();';
+       student_id_ := advisor_id;
 
-       INSERT INTO TABLENAME(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T, Students AS S, batch_advisors AS B 
-       WHERE advisor_id = B.advisor_id AND T.student_id = S.student_id AND B.department = S.department AND B.year = S.year;
+       
+              execute 'INSERT INTO advisor_tickets_' || advisor_id || '(ticket_id, offering_id, student_id)
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T,  Students AS S, batch_advisors AS B
+       WHERE T.student_id = S.student_id AND B.department = S.department AND B.year = S.year AND B.advisor_id = '|| advisor_id || ';';
+            
+
+
 
     END; $$;
 
@@ -985,27 +1035,36 @@ language plpgsql
 as $$
 declare
       table_name varchar(255);
-      adv_id varchar(255);
+      adv_id integer;
       decision boolean;
+      new_ticket_id integer;
 begin
-        SELECT batch_advisors.advisor_id 
+        SELECT B.advisor_id 
         INTO adv_id 
-        FROM offerings AS O, tickets_global AS T, batch_advisors AS B  
-        WHERE O.offering_id = T.offering_id AND O.student_id = T.student_id AND O.department = B.department AND O.year = B.year;
+        FROM students AS S, tickets_global AS T, batch_advisors AS B  
+        WHERE NEW.student_id = S.student_id AND S.department = B.department AND S.year = B.year;
 
-        table_name := 'advisor_tickets_' + adv_id;
-        
-        SELECT advisor_approval
-        INTO decision 
-        FROM table_name
-        WHERE table_name.ticket_id = new.ticket_id;
+        table_name := 'advisor_tickets_' || adv_id;
+        new_ticket_id := new.ticket_id;
+
+        EXECUTE FORMAT('SELECT advisor_approval
+        FROM %I
+        WHERE %I.ticket_id = %L;', table_name, table_name, new_ticket_id)
+        INTO decision; 
  
-        if decision<>null THEN        
+        if decision=null THEN   
+            return null;
+        else      
             return new;
         end if;
 end; $$;
 
 
+CREATE TRIGGER check_advisor_verdict
+BEFORE INSERT 
+ON dean_tickets
+FOR EACH ROW
+EXECUTE PROCEDURE check_advisor_verdict();    
 
 CREATE OR REPLACE PROCEDURE dean_receives_tickets(       
     )
@@ -1013,17 +1072,13 @@ CREATE OR REPLACE PROCEDURE dean_receives_tickets(
     as $$
     BEGIN
     
-       CREATE TRIGGER check_advisor_verdict
-       BEFORE INSERT 
-       ON dean_tickets
-       FOR EACH ROW
-       EXECUTE PROCEDURE check_advisor_verdict();    
+
     
 
-       INSERT INTO dean_tickets(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global;
+       INSERT INTO dean_tickets(ticket_id, offering_id, student_id) 
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T;
        
-       DELETE FROM Tickets_global WHERE ticket_id in (SELECT ticket_id FROM TABLENAME);
+
     END; $$;
 
 CREATE OR REPLACE PROCEDURE instructor_decision(
@@ -1036,7 +1091,7 @@ CREATE OR REPLACE PROCEDURE instructor_decision(
     declare 
        TABLENAME varchar(255) := 'instructor_tickets_' || ins_id; 
     BEGIN
-       UPDATE TABLENAME set instructor_approval = decision WHERE ticket_id = ticket_id_value;
+       EXECUTE FORMAT('UPDATE %I set instructor_approval = %L WHERE ticket_id = %L;', TABLENAME, decision, ticket_id_value);
     END; $$;   
 
      
@@ -1050,7 +1105,7 @@ CREATE OR REPLACE PROCEDURE advisor_decision(
     declare 
        TABLENAME varchar(255) := 'advisor_tickets_' || adv_id; 
     BEGIN
-       UPDATE TABLENAME set advisor_approval = decision WHERE ticket_id = ticket_id_value;
+       EXECUTE FORMAT('UPDATE %I set advisor_approval = %L WHERE ticket_id = %L;', TABLENAME, decision, ticket_id_value);
     END; $$;   
 
 CREATE OR REPLACE PROCEDURE dean_decision(
@@ -1060,7 +1115,7 @@ CREATE OR REPLACE PROCEDURE dean_decision(
     language plpgsql
     as $$
     BEGIN
-       UPDATE dean_tickets set dean_approval = decision WHERE ticket_id = ticket_id_value;
+       UPDATE dean_tickets set dean_verdict = decision WHERE ticket_id = ticket_id_value;
     END; $$;   
 
 
@@ -1074,10 +1129,10 @@ declare
       adv_id varchar(255);
       decision boolean;
 begin
-        IF NEW.dean_approval = true then
+        IF NEW.dean_verdict = true then
             raise notice 'ticket approved';
             INSERT INTO registrations(offering_id, student_id)
-            VALUES (_offering_id, _student_id);
+            VALUES (new.offering_id, new.student_id);
         ELSE 
             raise notice 'ticket rejected';
         END IF;
