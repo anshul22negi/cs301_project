@@ -1,13 +1,22 @@
 create database project3;
 \c project3
 
-create role dean 
-login 
-password 'dean';
 
 CREATE GROUP gp_instructors;
 CREATE GROUP gp_students;
 CREATE GROUP gp_advisors;
+
+do $$
+begin
+IF NOT EXISTS (SELECT * FROM pg_user WHERE usename = 'dean') then
+raise notice 'dean does not exist, creating dean';
+create role dean login password 'dean';
+end if;
+end
+$$;
+
+
+
 
 
 CREATE TABLE students (
@@ -47,8 +56,10 @@ declare
 begin
     EXECUTE format('CREATE TABLE %I (offerring_id INTEGER PRIMARY KEY, grade INTEGER);', 'transcript_' || NEW.student_id);
     query := format('CREATE ROLE %I LOGIN PASSWORD ''st'';',  'st' || NEW.student_id);
-    RAISE NOTICE 'query = %', query; 
-    -- EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''st'';',  'st' || NEW.student_id);
+    RAISE NOTICE 'query = %', query;
+    IF NOT EXISTS (SELECT * FROM pg_user WHERE usename = 'st' || NEW.student_id) then
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''st'';',  'st' || NEW.student_id);
+    end if;
     RAISE notice 'student_id on insert = %', NEW.student_id;
     EXECUTE format('ALTER GROUP gp_students ADD USER %I;', 'st' || NEW.student_id);
     
@@ -145,10 +156,6 @@ TO dean;
 
 GRANT SELECT
 ON prerequisite
-TO PUBLIC;
-
-GRANT SELECT
-ON prerequisite
 TO gp_students, gp_instructors, gp_advisors;
 
 create or replace procedure add_prerequisite(
@@ -224,7 +231,9 @@ begin
     EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offerring_id INTEGER, student_id INTEGER, instructor_approval boolean);', 'instructor_tickets_' || NEW.instructor_id);
     query := format('CREATE ROLE %I LOGIN PASSWORD ''ins'';',  'ins' || NEW.instructor_id);
     RAISE NOTICE 'query = %', query; 
-    --EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ins'';',  'ins' || NEW.instructor_id);
+    IF NOT EXISTS (SELECT * FROM pg_user WHERE usename = 'ins' || NEW.instructor_id) then
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ins'';',  'ins' || NEW.instructor_id);
+    end if;
     RAISE notice 'instructor_ticket_id on insert = %', NEW.instructor_id;
     EXECUTE format('ALTER GROUP gp_instructors ADD USER %I;', 'ins' || NEW.instructor_id);
     
@@ -284,7 +293,9 @@ begin
     EXECUTE format('CREATE TABLE %I (ticket_id INTEGER PRIMARY KEY, offerring_id INTEGER, student_id INTEGER, advisor_approval boolean);', 'advisor_tickets_' || NEW.advisor_id);
     query := format('CREATE ROLE %I LOGIN PASSWORD ''ba'';',  'ba' || NEW.advisor_id);
     RAISE NOTICE 'query = %', query; 
-    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ba'';',  'ba' || NEW.advisor_id);
+    IF NOT EXISTS (SELECT * FROM pg_user WHERE usename = 'ba' || NEW.advisor_id) then
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''ba'';',  'ba' || NEW.advisor_id);
+    end if;
     RAISE notice 'advisor_ticket_id on insert = %', NEW.advisor_id;
     EXECUTE format('ALTER GROUP gp_advisors ADD USER %I;', 'ba' || NEW.advisor_id);
     
@@ -924,9 +935,32 @@ call register_student(6,5);
 call register_student(7,5);
 
 -- run again to test, now it passes the credit limit test
+ 
+------------------------------------------------------------------------
+--ADMIN
+insert into transcript_5 values(1,2);
+insert into transcript_5 values(7,2);
+------------------------------------------------------------------------
+--LOGIN st5
+-- cgpa criteria not met
 call register_student(6,5);
 -- LOGOUT st5
 -------------------------------------------------------------------------
+--ADMIN
+update transcript_5 t set grade = 8 where t.offerring_id = 1;
+update transcript_5 t set grade = 8 where t.offerring_id = 7;
+------------------------------------------------------------------------
+--LOGIN st5
+-- cgpa criteria met now
+call register_student(6,5);
+-- LOGOUT st5
+-------------------------------------------------------------------------
+--ADMIN
+delete from transcript_5;
+delete from transcript_4;
+-------------------------------------------------------------------------
+
+
 
 -- LOGIN st4, pass = st
 -- off_id, student_id
@@ -941,10 +975,6 @@ call register_student(2,4);
 -------------------------------------------------------------
 */
 
-
--- call register_student(1,1);
--- call register_student(2,1);
-
 -- upload offerings grade
 create or replace procedure instructor_uploads_grades(
     _offering_id integer
@@ -954,7 +984,7 @@ SECURITY DEFINER
 as $$
 begin
 execute format('COPY %I '
-               'FROM ''D:\cs301_project\grades.csv'' '
+               'FROM ''D:\Uday\github_repos\cs301_project\grades.csv'' '
                'DELIMITER '','' CSV HEADER;', 'offering_' || _offering_id);
 end; $$;
 
@@ -986,6 +1016,8 @@ REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_instructors;
 GRANT EXECUTE ON PROCEDURE dean_approves_grades_transcript TO dean;
 
 /*
+
+PAUSE 3:
 -- LOGIN ins1 pass:ins
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(1, 8, 2021,2,6,7.5);   
