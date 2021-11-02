@@ -238,7 +238,7 @@ begin
     EXECUTE format('ALTER GROUP gp_instructors ADD USER %I;', 'ins' || NEW.instructor_id);
     
     EXECUTE format('GRANT SELECT ON %I TO gp_students, gp_instructors, gp_advisors;', 'instructor_tickets_' || NEW.instructor_id);
-    EXECUTE format('GRANT ALL ON %I TO dean;', 'instructor_tickets_' || NEW.instructor_id, 'ins' || NEW.instructor_id);
+    EXECUTE format('GRANT ALL ON %I TO dean, %I;', 'instructor_tickets_' || NEW.instructor_id, 'ins' || NEW.instructor_id);
     return NEW;        
 end; $$;
 
@@ -300,7 +300,7 @@ begin
     EXECUTE format('ALTER GROUP gp_advisors ADD USER %I;', 'ba' || NEW.advisor_id);
     
     EXECUTE format('GRANT SELECT ON %I TO %I, gp_instructors, gp_advisors, gp_students;', 'advisor_tickets_' || NEW.advisor_id, 'ba' || NEW.advisor_id);
-    EXECUTE format('GRANT ALL ON %I TO dean;', 'advisor_tickets_' || NEW.advisor_id, 'ba' || NEW.advisor_id);
+    EXECUTE format('GRANT ALL ON %I TO dean,%I;', 'advisor_tickets_' || NEW.advisor_id, 'ba' || NEW.advisor_id);
     return NEW;        
 end; $$;
 
@@ -786,6 +786,14 @@ CREATE TABLE dean_tickets(
 GRANT ALL ON Tickets_global 
 TO dean, gp_instructors, gp_students, gp_advisors;
 
+GRANT ALL ON dean_tickets 
+TO dean;
+
+GRANT SELECT ON dean_tickets
+TO dean, gp_instructors, gp_students, gp_advisors;
+
+
+
 CREATE TRIGGER trigger_check_slot_before_registration
 BEFORE INSERT
 ON Tickets_global
@@ -979,6 +987,7 @@ call register_student(6,5);
 --ADMIN
 delete from transcript_5;
 delete from transcript_4;
+delete from tickets_global;
 -------------------------------------------------------------------------
 -- LOGIN st4, pass = st
 -- off_id, student_id
@@ -990,74 +999,7 @@ call register_student(2,4);
 -------------------------------------------------------------
 */
 
--- upload offerings grade
-create or replace procedure instructor_uploads_grades(
-    _offering_id integer
-)
-language  plpgsql
-SECURITY DEFINER
-as $$
-begin
-execute format('COPY %I '
-               'FROM ''D:\Uday\github_repos\cs301_project\grades.csv'' '
-               'DELIMITER '','' CSV HEADER;', 'offering_' || _offering_id);
-end; $$;
 
-REVOKE EXECUTE ON PROCEDURE instructor_uploads_grades FROM gp_students;
-GRANT EXECUTE ON PROCEDURE instructor_uploads_grades TO gp_instructors;
-
--- dean approves grades of the offering and writes them to the trasncript 
--- tables of the student
-
-create or replace procedure dean_approves_grades_transcript(
-    _offering_id integer
-)
-language  plpgsql
-as $$
-declare
-    rec record;
-begin
-    for rec in execute format('select * '
-                              'from %I;', 'offering_' || _offering_id)
-    loop
-        --execute format('insert into %I values($1, $2)', 'transcript_' || rec.student_id)
-        --using _offering_id, rec.grade;
-        execute format('insert into %I values($1, $2) on conflict(offerring_id) do update set grade = excluded.grade', 'transcript_' || rec.student_id)
-        using _offering_id, rec.grade;
-    end loop;
-end; $$;
-REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_students;
-REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_instructors;
-GRANT EXECUTE ON PROCEDURE dean_approves_grades_transcript TO dean;
-
-/*
-PAUSE 3:
--- LOGIN ins1 pass:ins
--- ins_id, course_id, year, sem, slot, cgpa 
-call instructor_creates_offering(1, 8, 2021,2,6,7.5);   
--- offering_id. b_dep, b_year
-call instructor_creates_offering_batches(8, 'cse', 2019);
-call instructor_creates_offering_batches(8, 'cse', 2018);
--- LOGOUT ins1 pass:ins
--- LOGIN st4, pass = st
-call register_student(8,4);
--- LOGOUT st4
--- LOGIN st5, pass = st
-call register_student(8,5);
--- LOGOUT st5
--- LOGIN ins1 pass:ins
-select * from offering_8;
-call instructor_uploads_grades(8);
-select * from offering_8;
--- LOGOUT ins1 pass:ins
--- LOGIN dean pass:dean
-select * from transcript_4;
-select * from transcript_5;
-call dean_approves_grades_transcript(8);
-select * from transcript_4;
-select * from transcript_5;
--- LOGOUT dean pass:dean
-*/
 -------------------------------------------------------------
 
 --------------tickets approvals ----------------
@@ -1103,10 +1045,10 @@ begin
         
         raise notice 'decision %', decision;
 
-        if decision=null THEN        
-            return null;
-        ELSE
+        if decision=true OR decision=false THEN        
             return new;
+        ELSE
+            return null;
         end if;
 end; $$;
 
@@ -1167,10 +1109,10 @@ begin
         WHERE %I.ticket_id = %L;', table_name, table_name, new_ticket_id)
         INTO decision; 
  
-        if decision=null THEN   
-            return null;
-        else      
+        if decision=true OR decision=false THEN   
             return new;
+        else      
+            return null;
         end if;
 end; $$;
 
@@ -1261,9 +1203,74 @@ ON dean_tickets
 FOR EACH ROW
 EXECUTE PROCEDURE resolve_tickets(); 
 
+/*
+--PAUSE 3------------------------------------
+-log into st6
+-registers new student for demonstration
+call register_student(1,6);
+call register_student(6,6);
+-log out of st6
 
+-log into ins2
+call instructor_receives_tickets(2);
+ select * from instructor_tickets_2;
+call instructor_decision(2,1,true);
+ select * from instructor_tickets_2;
+-log out og ins2
 
+-log into ba3
+call advisor_receives_tickets(3);
+call advisor_decision(3,1,true);
+- log out of ba3
 
+-log into dean
+call dean_receives_tickets();
+call dean_decision(1,true);
+-log out
+
+-----------------------------------------------
+*/
+--grade allocation
+
+-- upload offerings grade
+create or replace procedure instructor_uploads_grades(
+    _offering_id integer
+)
+language  plpgsql
+SECURITY DEFINER
+as $$
+begin
+execute format('COPY %I '
+               'FROM ''D:\grades.csv'' '
+               'DELIMITER '','' CSV HEADER;', 'offering_' || _offering_id);
+end; $$;
+
+REVOKE EXECUTE ON PROCEDURE instructor_uploads_grades FROM gp_students;
+GRANT EXECUTE ON PROCEDURE instructor_uploads_grades TO gp_instructors;
+
+-- dean approves grades of the offering and writes them to the trasncript 
+-- tables of the student
+
+create or replace procedure dean_approves_grades_transcript(
+    _offering_id integer
+)
+language  plpgsql
+as $$
+declare
+    rec record;
+begin
+    for rec in execute format('select * '
+                              'from %I;', 'offering_' || _offering_id)
+    loop
+        --execute format('insert into %I values($1, $2)', 'transcript_' || rec.student_id)
+        --using _offering_id, rec.grade;
+        execute format('insert into %I values($1, $2) on conflict(offerring_id) do update set grade = excluded.grade', 'transcript_' || rec.student_id)
+        using _offering_id, rec.grade;
+    end loop;
+end; $$;
+REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_students;
+REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_instructors;
+GRANT EXECUTE ON PROCEDURE dean_approves_grades_transcript TO dean;
 
 
 
@@ -1383,3 +1390,43 @@ begin
     
 
 END; $$;
+
+/*
+PAUSE 4:
+-- LOGIN ins1 pass:ins
+-- ins_id, course_id, year, sem, slot, cgpa 
+call instructor_creates_offering(1, 8, 2021,2,6,7.5);   
+-- offering_id. b_dep, b_year
+call instructor_creates_offering_batches(8, 'cse', 2019);
+call instructor_creates_offering_batches(8, 'cse', 2018);
+-- LOGOUT ins1 pass:ins
+-- LOGIN st4, pass = st
+call register_student(8,4);
+-- LOGOUT st4
+-- LOGIN st5, pass = st
+call register_student(8,5);
+-- LOGOUT st5
+-- LOGIN ins1 pass:ins
+select * from offering_8;
+call instructor_uploads_grades(8);
+select * from offering_8;
+-- LOGOUT ins1 pass:ins
+-- LOGIN dean pass:dean
+select * from transcript_4;
+select * from transcript_5;
+call dean_approves_grades_transcript(8);
+select * from transcript_4;
+select * from transcript_5;
+-- LOGOUT dean pass:dean
+
+
+insert into transcript_1(offerring_id, grade) VALUES(4, 8);
+insert into transcript_1(offerring_id, grade) VALUES(7, 7);
+insert into transcript_1(offerring_id, grade) VALUES(2, 9);
+insert into transcript_1(offerring_id, grade) VALUES(3, 8);
+insert into transcript_1(offerring_id, grade) VALUES(6, 6);
+insert into transcript_1(offerring_id, grade) VALUES(8, 8);
+
+Login st1
+call return_gradesheet(1);
+*/
