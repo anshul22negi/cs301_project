@@ -439,7 +439,6 @@ end; $$;
 
 -- PAUSE 1: switch login
 /*
-
 -------------------------------------------------------------
 -- LOGIN ins1 pass:ins
 -- ins_id, course_id, year, sem, slot, cgpa 
@@ -448,7 +447,6 @@ call instructor_creates_offering(1, 1, 2021,1,1,7.5);
 call instructor_creates_offering_batches(1, 'cse', 2019);
 -- LOGOUT ins1 pass:ins
 -------------------------------------------------------------
-
 -------------------------------------------------------------
 -- LOGIN ins2 pass:ins
 -- ins_id, course_id, year, sem, slot, cgpa 
@@ -456,45 +454,35 @@ call instructor_creates_offering(2, 2, 2021,1,1,6);
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(2, 'cse', 2019);
 call instructor_creates_offering_batches(2, 'cse', 2018);
-
-
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(2, 3, 2021,1,2,7);   
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(3, 'cse', 2019);
 call instructor_creates_offering_batches(3, 'cse', 2018);
-
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(2, 2, 2020,1,1,7);   
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(4, 'cse', 2019);
 call instructor_creates_offering_batches(4, 'cse', 2018);
-
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(2, 5, 2021,1,3,9);   
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(5, 'cse', 2019);
 call instructor_creates_offering_batches(5, 'cse', 2018);
-
-
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(2, 5, 2021,2,1,4);   
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(6, 'cse', 2019);
 call instructor_creates_offering_batches(6, 'cse', 2018);
-
 -- ins_id, course_id, year, sem, slot, cgpa 
 call instructor_creates_offering(2, 7, 2020,2,1,4);   
 -- offering_id. b_dep, b_year
 call instructor_creates_offering_batches(7, 'cse', 2019);
 call instructor_creates_offering_batches(7, 'cse', 2018);
-
 -- LOGOUT ins2 pass:ins
 -------------------------------------------------------------
-
 - LOGIN admin
 insert into transcript_4 values(4, 8);
-
 */
 
 create or replace function fetch_offering_student(
@@ -778,12 +766,12 @@ EXECUTE PROCEDURE check_cgpa_before_registration();
 ----------------
 
 CREATE TABLE Tickets_global(
-               ticket_id serial PRIMARY KEY,
+               ticket_id INTEGER PRIMARY KEY,
                offering_id INTEGER NOT NULL,
 	           student_id INTEGER NOT NULL,
                FOREIGN KEY (student_id) REFERENCES students (student_id),
-               FOREIGN KEY (offering_id) REFERENCES offerings (offering_id)
-
+               FOREIGN KEY (offering_id) REFERENCES offerings (offering_id),
+               UNIQUE (OFFERING_ID, STUDENT_ID)
                
 );
 
@@ -797,6 +785,31 @@ CREATE TABLE dean_tickets(
 
 GRANT ALL ON Tickets_global 
 TO dean, gp_instructors, gp_students, gp_advisors;
+
+CREATE TRIGGER trigger_check_slot_before_registration
+BEFORE INSERT
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_slot_before_registration();
+
+
+CREATE TRIGGER trigger_check_batch_before_registration
+BEFORE INSERT
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_batch_before_registration();
+
+CREATE TRIGGER trigger_check_prerequisite_before_registration
+BEFORE INSERT  
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_prerequisite_before_registration();
+
+CREATE TRIGGER trigger_check_cgpa_before_registration
+BEFORE INSERT  
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_cgpa_before_registration();
 
 
 create or replace procedure register_student(
@@ -814,7 +827,9 @@ declare
     current_course_credits integer;
     current_total_credits integer;
     _batch_year integer; 
-    _found integer;   
+    _found integer; 
+    Ticket_id_created integer; 
+    num_entrys integer;  
 begin
     -- calculate the 1.25 * average of credits of previouse two semesters
     SELECT c.credits, o.year, o.semester
@@ -902,38 +917,44 @@ begin
             VALUES (_offering_id, _student_id);
     else
             raise notice 'credit limit exceeded, ticket raised';
-            -- TODO:
-            --INSERT INTO Tickets_global(offering_id, student_id) 
-            --VALUES (_offering_id, _student_id);
+            SELECT MAX(ticket_id)
+            INTO ticket_id_created
+            FROM Tickets_global T;
+
+            SELECT count(*)
+            INTO num_entrys
+            FROM Tickets_global T;
+
+            if num_entrys = 0 then
+                ticket_id_created := 0;
+            end if;
+
+            ticket_id_created := ticket_id_created + 1;
+
+            INSERT INTO Tickets_global(ticket_id, offering_id, student_id) 
+            VALUES (ticket_id_created, _offering_id, _student_id);
     end if;                    
 end; $$;
 
 /*
-
 PAUSE 2:
-
 -------------------------------------------------------------------------
 -- LOGIN st5, pass = st
 -- off_id, student_id
 -- check for slot and batch
 call register_student(1,5);
-
  -- check for slot clash and it failss
 call register_student(2,5);
-
  -- check for prerequisite which will fail because course 3 has prerequisite 2 
  -- for which student 5 is not registerd
  call register_student(3,5);
-
 -- check for credit limit which is exceeded
 -- offering 6 is of sem 2 and has 3 credits
 -- in semester 1 student has registered for offering 1 which is a one credit course
 call register_student(6,5);
-
 -- registering in offering 7 with 7 credits 
 -- to test the above condition again
 call register_student(7,5);
-
 -- run again to test, now it passes the credit limit test
  
 ------------------------------------------------------------------------
@@ -959,18 +980,12 @@ call register_student(6,5);
 delete from transcript_5;
 delete from transcript_4;
 -------------------------------------------------------------------------
-
-
-
 -- LOGIN st4, pass = st
 -- off_id, student_id
-
 -- check batch, fails because batch not allowed
 call register_student(1,4);
-
 -- check batch, passes because batch allowed
 call register_student(2,4);
-
 -- LOGOUT st4
 -------------------------------------------------------------
 */
@@ -1016,7 +1031,6 @@ REVOKE EXECUTE ON PROCEDURE dean_approves_grades_transcript FROM gp_instructors;
 GRANT EXECUTE ON PROCEDURE dean_approves_grades_transcript TO dean;
 
 /*
-
 PAUSE 3:
 -- LOGIN ins1 pass:ins
 -- ins_id, course_id, year, sem, slot, cgpa 
@@ -1025,21 +1039,17 @@ call instructor_creates_offering(1, 8, 2021,2,6,7.5);
 call instructor_creates_offering_batches(8, 'cse', 2019);
 call instructor_creates_offering_batches(8, 'cse', 2018);
 -- LOGOUT ins1 pass:ins
-
 -- LOGIN st4, pass = st
 call register_student(8,4);
 -- LOGOUT st4
-
 -- LOGIN st5, pass = st
 call register_student(8,5);
 -- LOGOUT st5
-
 -- LOGIN ins1 pass:ins
 select * from offering_8;
 call instructor_uploads_grades(8);
 select * from offering_8;
 -- LOGOUT ins1 pass:ins
-
 -- LOGIN dean pass:dean
 select * from transcript_4;
 select * from transcript_5;
@@ -1047,10 +1057,6 @@ call dean_approves_grades_transcript(8);
 select * from transcript_4;
 select * from transcript_5;
 -- LOGOUT dean pass:dean
-
-
-
-
 */
 -------------------------------------------------------------
 
@@ -1068,9 +1074,9 @@ CREATE OR REPLACE PROCEDURE instructor_receives_tickets(
     declare
        TABLENAME varchar(255) := 'instructor_tickets_' || ins_id; 
     BEGIN
-       INSERT INTO TABLENAME(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T
-       WHERE ins_id = T.instructor_id;
+       execute 'INSERT INTO ' || 'instructor_tickets_' || ins_id || '(ticket_id, offerring_id, student_id) 
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T, Offerings AS O
+       WHERE O.offering_id = T.offering_id AND O.instructor_id = '|| ins_id || ';';
 
     -- DELETE FROM Tickets_global WHERE ticket_id in (SELECT ticket_id FROM TABLENAME);
     END; $$; 
@@ -1082,23 +1088,24 @@ returns trigger
 language plpgsql
 as $$
 declare
-      table_name varchar(255);
-      ins_id varchar(255);
+      ins_id integer;
       decision boolean;
 begin
-        SELECT offerings.instructor_id 
+        SELECT O.instructor_id 
         INTO ins_id 
-        FROM offerings AS O, tickets_global AS T 
-        WHERE O.offering_id = T.offering_id AND O.student_id = T.student_id;
-
-        table_name := 'instructor_tickets_' + ins_id;
+        FROM offerings AS O, tickets_global AS T
+        WHERE O.offering_id = NEW.offerring_id;
         
-        SELECT instructor_approval
-        INTO decision 
-        FROM table_name
-        WHERE table_name.ticket_id = new.ticket_id;
- 
-        if decision<>null THEN        
+        execute 'SELECT instructor_approval 
+        FROM ' || 'instructor_tickets_' || ins_id || ' AS T
+        WHERE T.ticket_id = ' || new.ticket_id || ';'
+        INTO decision;
+        
+        raise notice 'decision %', decision;
+
+        if decision=null THEN        
+            return null;
+        ELSE
             return new;
         end if;
 end; $$;
@@ -1111,20 +1118,28 @@ CREATE OR REPLACE PROCEDURE advisor_receives_tickets(
     language  plpgsql
     as $$
     declare
-       TABLENAME varchar(255) := 'advisor_tickets_' || adv_id; 
        ins_table varchar(255);
        ins_id integer;
+       ticket_id_ integer;
+       offering_id_ integer;
+       student_id_ integer;
     BEGIN
        
-       CREATE TRIGGER check_instructor_verdict
+       execute 'DROP TRIGGER IF EXISTS check_instructor_verdict ON advisor_tickets_' || advisor_id || ';';
+       execute 'CREATE TRIGGER check_instructor_verdict
        BEFORE INSERT 
-       ON TABLENAME
+       ON ' || 'advisor_tickets_' || advisor_id || ' 
        FOR EACH ROW
-       EXECUTE PROCEDURE check_instructor_verdict();
+       EXECUTE PROCEDURE check_instructor_verdict();';
+       student_id_ := advisor_id;
 
-       INSERT INTO TABLENAME(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T, Students AS S, batch_advisors AS B 
-       WHERE advisor_id = B.advisor_id AND T.student_id = S.student_id AND B.department = S.department AND B.year = S.year;
+       
+              execute 'INSERT INTO advisor_tickets_' || advisor_id || '(ticket_id, offerring_id, student_id)
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T,  Students AS S, batch_advisors AS B
+       WHERE T.student_id = S.student_id AND B.department = S.department AND B.year = S.year AND B.advisor_id = '|| advisor_id || ';';
+            
+
+
 
     END; $$;
 
@@ -1135,27 +1150,36 @@ language plpgsql
 as $$
 declare
       table_name varchar(255);
-      adv_id varchar(255);
+      adv_id integer;
       decision boolean;
+      new_ticket_id integer;
 begin
-        SELECT batch_advisors.advisor_id 
+        SELECT B.advisor_id 
         INTO adv_id 
-        FROM offerings AS O, tickets_global AS T, batch_advisors AS B  
-        WHERE O.offering_id = T.offering_id AND O.student_id = T.student_id AND O.department = B.department AND O.year = B.year;
+        FROM students AS S, tickets_global AS T, batch_advisors AS B  
+        WHERE NEW.student_id = S.student_id AND S.department = B.department AND S.year = B.year;
 
-        table_name := 'advisor_tickets_' + adv_id;
-        
-        SELECT advisor_approval
-        INTO decision 
-        FROM table_name
-        WHERE table_name.ticket_id = new.ticket_id;
+        table_name := 'advisor_tickets_' || adv_id;
+        new_ticket_id := new.ticket_id;
+
+        EXECUTE FORMAT('SELECT advisor_approval
+        FROM %I
+        WHERE %I.ticket_id = %L;', table_name, table_name, new_ticket_id)
+        INTO decision; 
  
-        if decision<>null THEN        
+        if decision=null THEN   
+            return null;
+        else      
             return new;
         end if;
 end; $$;
 
 
+CREATE TRIGGER check_advisor_verdict
+BEFORE INSERT 
+ON dean_tickets
+FOR EACH ROW
+EXECUTE PROCEDURE check_advisor_verdict();    
 
 CREATE OR REPLACE PROCEDURE dean_receives_tickets(       
     )
@@ -1163,17 +1187,13 @@ CREATE OR REPLACE PROCEDURE dean_receives_tickets(
     as $$
     BEGIN
     
-       CREATE TRIGGER check_advisor_verdict
-       BEFORE INSERT 
-       ON dean_tickets
-       FOR EACH ROW
-       EXECUTE PROCEDURE check_advisor_verdict();    
+
     
 
-       INSERT INTO dean_tickets(ticket_id, offerring_id, student_id) 
-       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global;
+       INSERT INTO dean_tickets(ticket_id, offering_id, student_id) 
+       SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T;
        
-       DELETE FROM Tickets_global WHERE ticket_id in (SELECT ticket_id FROM TABLENAME);
+
     END; $$;
 
 CREATE OR REPLACE PROCEDURE instructor_decision(
@@ -1186,7 +1206,7 @@ CREATE OR REPLACE PROCEDURE instructor_decision(
     declare 
        TABLENAME varchar(255) := 'instructor_tickets_' || ins_id; 
     BEGIN
-       UPDATE TABLENAME set instructor_approval = decision WHERE ticket_id = ticket_id_value;
+       EXECUTE FORMAT('UPDATE %I set instructor_approval = %L WHERE ticket_id = %L;', TABLENAME, decision, ticket_id_value);
     END; $$;   
 
      
@@ -1200,7 +1220,7 @@ CREATE OR REPLACE PROCEDURE advisor_decision(
     declare 
        TABLENAME varchar(255) := 'advisor_tickets_' || adv_id; 
     BEGIN
-       UPDATE TABLENAME set advisor_approval = decision WHERE ticket_id = ticket_id_value;
+       EXECUTE FORMAT('UPDATE %I set advisor_approval = %L WHERE ticket_id = %L;', TABLENAME, decision, ticket_id_value);
     END; $$;   
 
 CREATE OR REPLACE PROCEDURE dean_decision(
@@ -1210,7 +1230,7 @@ CREATE OR REPLACE PROCEDURE dean_decision(
     language plpgsql
     as $$
     BEGIN
-       UPDATE dean_tickets set dean_approval = decision WHERE ticket_id = ticket_id_value;
+       UPDATE dean_tickets set dean_verdict = decision WHERE ticket_id = ticket_id_value;
     END; $$;   
 
 
@@ -1224,10 +1244,10 @@ declare
       adv_id varchar(255);
       decision boolean;
 begin
-        IF NEW.dean_approval = true then
+        IF NEW.dean_verdict = true then
             raise notice 'ticket approved';
             INSERT INTO registrations(offering_id, student_id)
-            VALUES (_offering_id, _student_id);
+            VALUES (new.offering_id, new.student_id);
         ELSE 
             raise notice 'ticket rejected';
         END IF;
@@ -1242,37 +1262,20 @@ FOR EACH ROW
 EXECUTE PROCEDURE resolve_tickets(); 
 
 
-create or replace function post_registration()
-returns trigger 
-language plpgsql
-as $$
-declare 
-     offering_table varchar(255);
-     grades_table varchar(255);
-BEGIN
-     offering_table := 'offering_' || NEW.offering_id;
-     grades_table := 'transcript_' || NEW.student_id;
 
-     INSERT INTO offering_table(student_id) VALUES(NEW.student_id);
-     INSERT INTO grades_table(offering_id) VALUES(NEW.offering_id);
 
-END; $$;
 
-CREATE TRIGGER post_registration
-AFTER INSERT 
-ON registrations
-FOR EACH ROW
-EXECUTE PROCEDURE post_registration();
+
 
 
 create or replace PROCEDURE return_gradesheet(
-     student_id integer
+     student_id_ integer
 )
 language  plpgsql
 AS $$
 declare 
-    table_name varchar(255) := 'transcript_' || NEW.student_id;
-    student_name varchar(255);
+    table_name varchar(255) := 'transcript_' || student_id_;
+    student_name_ varchar(255);
     student_department varchar(255);
     student_year integer;
     cur1 refcursor;
@@ -1281,36 +1284,42 @@ declare
     rec2 record;
     current_semester integer;
     current_year integer;
-    total_credits integer :=0;
-    total_points integer :=0;
-    cgpa integer :=0;
-    sgpa integer :=0;
-    credits_this_sem integer :=0;
-    points_this_sem integer :=0;
+    total_credits float :=0;
+    total_points float :=0;
+    cgpa float :=0;
+    sgpa float :=0;
+    credits_this_sem float :=0;
+    points_this_sem float :=0;
     current_credit integer;
     current_grade integer;
     current_offering integer;
+    text_query text;
 begin
-    select student_name,department, year  
-    INTO student_name, student_department, student_year
+    select name,department, year  
+    INTO student_name_, student_department, student_year
     from students AS S
-    WHERE S.student_id = student_id;
+    WHERE S.student_id = student_id_;
 
-    raise notice 'student name %',student_name ;
+    raise notice 'student name %',student_name_ ;
     raise notice 'department %',student_department;
     raise notice 'starting year %',student_year;
     raise notice '               ';
     raise notice '*********************';
     raise notice '               ';
-
-        open cur1 for 
+        /*
+        EXECUTE FORMAT('open cur1 for 
         select DISTINCT offerings.year, offerings.semester
-        from offerings, table_name
-        where offerings.offering_id = table_name.offering_id
-        order by offerings.year, offerings.semester;
+        from offerings, %I AS T
+        where offerings.offering_id = T.offering_id
+        order by offerings.year, offerings.semester;',table_name);
+        */
 
+        for rec1 in EXECUTE FORMAT(' select DISTINCT offerings.year, offerings.semester
+        from offerings, %I T
+        where offerings.offering_id = T.offerring_id
+        order by offerings.year, offerings.semester;',table_name)
         loop
-            fetch cur1 into rec1;
+            --fetch cur1 into rec1;
             exit when not found;
             current_semester := rec1.semester;
             current_year := rec1.year;
@@ -1318,23 +1327,30 @@ begin
             raise notice 'current semester %',current_semester;
             raise notice 'current year %',current_year;
             raise notice '               ';
-
-            open cur2 for 
-            select T.offering_id, T.grade, C.credits
-            FROM offerings AS O, table_name AS T, course_catalogues AS C
-            WHERE O.semester = current_semester AND O.year = current_year AND O.offering_id = T.offering_id AND O.course_id = C.course_id;
-               
+            /*
+            EXECUTE FORMAT("open %I for 
+            select T.offerring_id, T.grade, C.credits
+            FROM offerings AS O, %I AS T, course_catalogues AS C
+            WHERE O.semester = %I AND O.year = %I AND O.offering_id = T.offerring_id AND O.course_id = C.course_id;",
+            cur2, table_name, current_semester, current_year);
+            */
             raise notice 'offering_id grade'; 
             raise notice '             ';
             credits_this_sem := 0;
             points_this_sem := 0;
+
+            for rec2 in EXECUTE FORMAT( 'select T.offerring_id, T.grade, C.credits 
+            FROM offerings O, %I T, course_catalogue C
+            WHERE O.semester = $1 AND O.year = $2 AND O.offering_id = T.offerring_id AND O.course_id = C.course_id;',
+            table_name)
+            USING  current_semester, current_year
             LOOP
-                fetch cur2 into rec2;
+                --fetch cur2 into rec2;
                 exit when not found;
 
-                current_offering = rec2.offering_id;
-                current_grade = rec2.grade;
-                current_credit = rec2.credits;
+                current_offering := rec2.offerring_id;
+                current_grade := rec2.grade;
+                current_credit := rec2.credits;
                 
                 raise notice '% %',current_offering, current_grade;
                 raise notice '            ';
@@ -1367,10 +1383,3 @@ begin
     
 
 END; $$;
-
-
-
-
-
-
-
