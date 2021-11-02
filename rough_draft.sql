@@ -1158,8 +1158,8 @@ BEGIN
      offering_table := 'offering_' || NEW.offering_id;
      grades_table := 'transcript_' || NEW.student_id;
 
-     INSERT INTO offering_table(student_id) VALUES(NEW.student_id);
-     INSERT INTO grades_table(offering_id) VALUES(NEW.offering_id);
+     EXECUTE 'INSERT INTO ' || offering_table || '(student_id) VALUES(' || NEW.student_id || ');';
+     EXECUTE 'INSERT INTO ' || grades_table || '(offering_id) VALUES(' || NEW.offering_id || ');';
 
 END; $$;
 
@@ -1208,11 +1208,11 @@ begin
     raise notice '*********************';
     raise notice '               ';
 
-        open cur1 for 
+        EXECUTE FORMAT('open %I for 
         select DISTINCT offerings.year, offerings.semester
-        from offerings, table_name
-        where offerings.offering_id = table_name.offering_id
-        order by offerings.year, offerings.semester;
+        from offerings, %I AS T
+        where offerings.offering_id = T.offering_id
+        order by offerings.year, offerings.semester;', cur1,table_name);
 
         loop
             fetch cur1 into rec1;
@@ -1224,10 +1224,11 @@ begin
             raise notice 'current year %',current_year;
             raise notice '               ';
 
-            open cur2 for 
+            EXECUTE FORMAT(open cur2 for 
             select T.offering_id, T.grade, C.credits
-            FROM offerings AS O, table_name AS T, course_catalogues AS C
-            WHERE O.semester = current_semester AND O.year = current_year AND O.offering_id = T.offering_id AND O.course_id = C.course_id;
+            FROM offerings AS O, %I AS T, course_catalogues AS C
+            WHERE O.semester = current_semester AND O.year = current_year AND O.offering_id = T.offering_id AND O.course_id = C.course_id;,
+            table_name, current_semester, current_year);
                
             raise notice 'offering_id grade'; 
             raise notice '             ';
