@@ -734,7 +734,7 @@ EXECUTE PROCEDURE check_cgpa_before_registration();
 ----------------
 
 CREATE TABLE Tickets_global(
-               ticket_id serial PRIMARY KEY,
+               ticket_id INTEGER PRIMARY KEY,
                offering_id INTEGER NOT NULL,
 	           student_id INTEGER NOT NULL,
                FOREIGN KEY (student_id) REFERENCES students (student_id),
@@ -742,6 +742,30 @@ CREATE TABLE Tickets_global(
 
                
 );
+
+CREATE TRIGGER trigger_check_slot_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_slot_before_registration();
+
+CREATE TRIGGER trigger_check_batch_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_batch_before_registration();
+
+CREATE TRIGGER trigger_check_prerequisite_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_prerequisite_before_registration();
+
+CREATE TRIGGER trigger_check_cgpa_before_registration
+BEFORE INSERT OR UPDATE 
+ON Tickets_global
+FOR EACH ROW
+EXECUTE PROCEDURE check_cgpa_before_registration();
 
 CREATE TABLE dean_tickets(
                ticket_id serial PRIMARY KEY,
@@ -751,8 +775,9 @@ CREATE TABLE dean_tickets(
 
 );
 
-GRANT ALL ON Tickets_global 
+GRANT ALL PRIVILEGES ON Tickets_global 
 TO dean, gp_instructors, gp_students, gp_advisors;
+
 
 
 create or replace procedure register_student(
@@ -770,7 +795,9 @@ declare
     current_course_credits integer;
     current_total_credits integer;
     _batch_year integer; 
-    _found integer;   
+    _found integer;  
+    Ticket_id_created integer; 
+    num_entrys integer;
 begin
     -- calculate the 1.25 * average of credits of previouse two semesters
     SELECT c.credits, o.year, o.semester
@@ -852,10 +879,24 @@ begin
             INSERT INTO registrations(offering_id, student_id)
             VALUES (_offering_id, _student_id);
     else
+
+            SELECT MAX(ticket_id)
+            INTO ticket_id_created
+            FROM Tickets_global T;
+
+            SELECT count(*)
+            INTO num_entrys
+            FROM Tickets_global T;
+
+            if num_entrys = 0 then
+                ticket_id_created := 0;
+            end if;
+
+            ticket_id_created := ticket_id_created + 1;
+
             raise notice 'credit limit exceeded, ticket raised';
-            -- TODO:
-            INSERT INTO Tickets_global(offering_id, student_id) 
-            VALUES (_offering_id, _student_id);
+            INSERT INTO Tickets_global(ticket_id, offering_id, student_id) 
+            VALUES (ticket_id_created, _offering_id, _student_id);
     end if;                    
 end; $$;
 --/////////////////
@@ -918,9 +959,9 @@ CREATE OR REPLACE PROCEDURE instructor_receives_tickets(
     declare
        TABLENAME varchar(255) := 'instructor_tickets_' || ins_id; 
     BEGIN
-       INSERT INTO TABLENAME(ticket_id, offerring_id, student_id) 
+       execute 'INSERT INTO ' || 'instructor_tickets_' || ins_id || '(ticket_id, offerring_id, student_id) 
        SELECT T.ticket_id, T.offering_id, T.student_id FROM Tickets_global AS T
-       WHERE ins_id = T.instructor_id;
+       WHERE T.instructor_id = '|| ins_id || ';';
 
     -- DELETE FROM Tickets_global WHERE ticket_id in (SELECT ticket_id FROM TABLENAME);
     END; $$; 
